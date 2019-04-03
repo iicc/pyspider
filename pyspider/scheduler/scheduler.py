@@ -50,6 +50,9 @@ class Project(object):
 
     @property
     def paused(self):
+        if self.scheduler.FAIL_PAUSE_NUM <= 0:
+            return False
+
         # unpaused --(last FAIL_PAUSE_NUM task failed)--> paused --(PAUSE_TIME)--> unpause_checking
         #                         unpaused <--(last UNPAUSE_CHECK_NUM task have success)--|
         #                             paused <--(last UNPAUSE_CHECK_NUM task no success)--|
@@ -107,10 +110,11 @@ class Project(object):
         self.updatetime = project_info['updatetime']
 
         md5sum = utils.md5string(project_info['script'])
-        if (self.md5sum != md5sum or self.waiting_get_info) and self.active:
-            self._send_on_get_info = True
+        if self.md5sum != md5sum:
             self.waiting_get_info = True
-        self.md5sum = md5sum
+            self.md5sum = md5sum
+        if self.waiting_get_info and self.active:
+            self._send_on_get_info = True
 
         if self.active:
             self.task_queue.rate = project_info['rate']
@@ -272,7 +276,7 @@ class Scheduler(object):
         logger.debug('project: %s loaded %d tasks.', project.name, len(task_queue))
 
         if project not in self._cnt['all']:
-            self._update_project_cnt(project)
+            self._update_project_cnt(project.name)
         self._cnt['all'].value((project.name, 'pending'), len(project.task_queue))
 
     def _update_project_cnt(self, project_name):
@@ -424,7 +428,7 @@ class Scheduler(object):
                 continue
             if project.waiting_get_info:
                 continue
-            if project.min_tick == 0:
+            if int(project.min_tick) == 0:
                 continue
             if self._last_tick % int(project.min_tick) != 0:
                 continue
@@ -474,7 +478,10 @@ class Scheduler(object):
         cnt = 0
         cnt_dict = dict()
         limit = self.LOOP_LIMIT
-        for project in itervalues(self.projects):
+
+        # dynamic assign select limit for each project, use qsize as weight
+        project_weights, total_weight = dict(), 0
+        for project in itervalues(self.projects):  # type:Project
             if not project.active:
                 continue
             # only check project pause when select new tasks, cronjob and new request still working
@@ -482,16 +489,40 @@ class Scheduler(object):
                 continue
             if project.waiting_get_info:
                 continue
+
+            # task queue
+            task_queue = project.task_queue  # type:TaskQueue
+            pro_weight = task_queue.size()
+            total_weight += pro_weight
+            project_weights[project.name] = pro_weight
+            pass
+
+        min_project_limit = int(limit / 10.)  # ensure minimum select limit for each project
+        max_project_limit = int(limit / 3.0)  # ensure maximum select limit for each project
+
+        for pro_name, pro_weight in iteritems(project_weights):
             if cnt >= limit:
                 break
+
+            project = self.projects[pro_name]  # type:Project
 
             # task queue
             task_queue = project.task_queue
             task_queue.check_update()
             project_cnt = 0
 
+            # calculate select limit for project
+            if total_weight < 1 or pro_weight < 1:
+                project_limit = min_project_limit
+            else:
+                project_limit = int((1.0 * pro_weight / total_weight) * limit)
+                if project_limit < min_project_limit:
+                    project_limit = min_project_limit
+                elif project_limit > max_project_limit:
+                    project_limit = max_project_limit
+
             # check send_buffer here. when not empty, out_queue may blocked. Not sending tasks
-            while cnt < limit and project_cnt < limit / 10:
+            while cnt < limit and project_cnt < project_limit:
                 taskid = task_queue.get()
                 if not taskid:
                     break
@@ -515,7 +546,7 @@ class Scheduler(object):
                     project._selected_tasks = False
                     project._send_finished_event_wait = 0
 
-                    self.newtask_queue.put({
+                    self._postpone_request.append({
                         'project': project.name,
                         'taskid': 'on_finished',
                         'url': 'data:,on_finished',

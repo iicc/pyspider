@@ -13,7 +13,11 @@ import inspect
 import datetime
 import traceback
 from flask import render_template, request, json
-from flask.ext import login
+
+try:
+    import flask_login as login
+except ImportError:
+    from flask.ext import login
 
 from pyspider.libs import utils, sample_handler, dataurl
 from pyspider.libs.response import rebuild_response
@@ -211,14 +215,6 @@ def get_script(project):
         200, {'Content-Type': 'application/json'}
 
 
-@app.route('/helper.js')
-def resizer_js():
-    host = request.headers['Host']
-    return render_template("helper.js", host=host), 200, {'Content-Type': 'application/javascript'}
-
-
-@app.route('/helper.html')
-def resizer_html():
-    height = request.args.get('height')
-    script = request.args.get('script', '')
-    return render_template("helper.html", height=height, script=script)
+@app.route('/blank.html')
+def blank_html():
+    return ""

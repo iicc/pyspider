@@ -22,7 +22,9 @@ from pyspider.libs import utils
 class Response(object):
 
     def __init__(self, status_code=None, url=None, orig_url=None, headers=CaseInsensitiveDict(),
-                 content='', cookies={}, error=None, traceback=None, save=None, js_script_result=None, time=0):
+                 content='', cookies=None, error=None, traceback=None, save=None, js_script_result=None, time=0):
+        if cookies is None:
+            cookies = {}
         self.status_code = status_code
         self.url = url
         self.orig_url = orig_url
@@ -167,7 +169,7 @@ class Response(object):
             return
         elif self.error:
             if self.traceback:
-                six.reraise(Exception, self.error, Traceback.from_string(self.traceback).as_traceback())
+                six.reraise(Exception, Exception(self.error), Traceback.from_string(self.traceback).as_traceback())
             http_error = HTTPError(self.error)
         elif (self.status_code >= 300) and (self.status_code < 400) and not allow_redirects:
             http_error = HTTPError('%s Redirection' % (self.status_code))
